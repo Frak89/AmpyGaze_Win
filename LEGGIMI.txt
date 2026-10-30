@@ -1,4 +1,4 @@
-AMPYGAZE — Rev4 per Windows 10/11 x64
+AMPYGAZE — Rev5 per Windows 10/11 x64
 
 INSTALLAZIONE
 1. Installa Python 3.11 a 64 bit da python.org, includendo il launcher py.
@@ -14,7 +14,7 @@ COMPORTAMENTO
 - Sguardo basso: MP3 in ciclo, dopo il ritardo impostato (0,35 secondi predefiniti).
 - Sguardo rialzato: stop; al successivo abbassamento il file ricomincia dall'inizio.
 - Una piccola isteresi evita ripetuti avvii vicino alla soglia.
-- Occhi chiusi per 1 secondo: MP3 attivo. Volto assente: audio fermo.
+- Occhi chiusi per 1 secondo: MP3 attivo. Volto assente: MP3 dopo il ritardo impostato.
 - Pausa interrompe audio e libera la webcam; Avvia riattiva il controllo.
 - Minimizzare mantiene l'app attiva; chiudere la finestra la termina.
 - MP3 copiato e impostazioni conservati in %LOCALAPPDATA%\AmpyGaze.
@@ -66,3 +66,13 @@ Ritardi: sguardo basso 0,35 s; occhi chiusi 1 s continuo.
 Un normale battito di palpebre non avvia l’audio.
 Se la chiusura viene rilevata anche con lo sguardo basso, riduci la
 soglia occhi chiusi. Il valore visualizzato aiuta a regolarla.
+
+REV5 — SENSIBILITÀ E TEMPI
+Sensibilità 0–100: più alta attiva l’audio con variazioni più piccole.
+Tempi indipendenti 0–30 secondi: sguardo basso, occhi chiusi, volto assente
+e arresto audio al ritorno dello sguardo alzato. Premi Applica impostazioni
+per salvare. I valori numerici sono applicati anche durante il controllo,
+se validi. Predefiniti: 0,35 s / 1 s / 0,35 s / 0 s.
+Assenza del volto su immagini webcam valide attiva ora l’audio.
+Errori della webcam o immagini bloccate restano distinti: fermano l’audio.
+Reset calibrazione riporta anche la sensibilità a 50 e conserva i tempi.

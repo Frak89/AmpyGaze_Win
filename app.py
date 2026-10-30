@@ -34,21 +34,43 @@ class Monitor:
     def __init__(self):
         self.gaze = Trigger()
         self.closed_since = None
-    def update(self, score, closed, face, threshold, gaze_delay, closed_delay, now, inverted=False):
+        self.absent_since = None
+    def update(self, score, closed, face, threshold, gaze_delay, closed_delay, now, inverted=False, absent_delay=.35):
         if not face:
             self.gaze = Trigger()
             self.closed_since = None
-            return False, 'Volto non rilevato — silenzio'
+            if self.absent_since is None: self.absent_since = now
+            active = now - self.absent_since >= absent_delay
+            return active, 'Volto assente — ' + ('MP3 attivo' if active else 'attesa')
+        self.absent_since = None
         if closed:
             self.gaze = Trigger()
             if self.closed_since is None: self.closed_since = now
             active = now - self.closed_since >= closed_delay
-            return active, 'Occhi chiusi — ' + ('MP3 attivo' if active else 'attesa 1 secondo')
+            return active, 'Occhi chiusi — ' + ('MP3 attivo' if active else 'attesa')
         self.closed_since = None
         active = self.gaze.update(score, threshold, gaze_delay, now, inverted)
         if score is None: return False, 'Sguardo non rilevato — silenzio'
         return active, 'Sguardo basso — MP3 attivo' if active else 'Occhi aperti — silenzio'
 
+
+class AudioGate:
+    def __init__(self):
+        self.active=False
+        self.release_since=None
+    def update(self, requested, now, release_delay):
+        if requested:
+            self.active=True
+            self.release_since=None
+        elif self.active:
+            if self.release_since is None: self.release_since=now
+            if now-self.release_since >= release_delay: self.active=False
+        return self.active
+
+
+def effective_threshold(threshold, sensitivity, inverted):
+    offset=(sensitivity-50)*.003
+    return threshold+offset if inverted else threshold-offset
 
 def eye_openness(points, ids, frame_width, frame_height):
     import math
@@ -73,14 +95,14 @@ def eye_measure(points, ids, iris):
 class App:
     def __init__(self, root):
         self.root = root
-        root.title('AmpyGaze Rev4 — controllo dello sguardo')
+        root.title('AmpyGaze Rev5 — controllo dello sguardo')
         root.geometry('920x890')
         try: self.cfg = json.loads(CONFIG.read_text(encoding='utf-8'))
         except (OSError, ValueError): self.cfg = {}
         self.events = queue.Queue(maxsize=2)
         self.stop_event = threading.Event()
         self.worker = None
-        self.monitor = Monitor()
+        self.monitor = Monitor(); self.gate=AudioGate()
         self.value = None
         self.calibration = None
         self.samples = []
@@ -90,14 +112,25 @@ class App:
         self.playing = False
         self.audio_ok = False
         self.threshold = tk.DoubleVar(value=self.cfg.get('threshold', .65))
-        self.delay = tk.DoubleVar(value=.35)
-        self.closed_delay = 1.0
+        self.delay = tk.DoubleVar(value=self.cfg.get('delay', .35))
+        self.closed_delay = tk.DoubleVar(value=self.cfg.get('closed_delay', 1.0))
+        self.absent_delay = tk.DoubleVar(value=self.cfg.get('absent_delay', .35))
+        self.release_delay = tk.DoubleVar(value=self.cfg.get('release_delay', 0.0))
+        self.sensitivity = tk.DoubleVar(value=self.cfg.get('sensitivity', 50))
         self.closed_threshold = tk.DoubleVar(value=self.cfg.get('closed_threshold', .14))
         self.camera = tk.IntVar(value=self.cfg.get('camera', 0))
         self.status = tk.StringVar(value='Pronto. Seleziona un MP3, avvia e calibra.')
         self.audio_label = tk.StringVar(value=self.cfg.get('audio', 'Nessun MP3 selezionato'))
         self.auto = tk.BooleanVar(value=self.autostart_enabled())
-        frame = ttk.Frame(root, padding=16); frame.pack(fill='both', expand=True)
+        canvas=tk.Canvas(root, highlightthickness=0)
+        scroll=ttk.Scrollbar(root, orient='vertical', command=canvas.yview)
+        scroll.pack(side='right', fill='y'); canvas.pack(side='left', fill='both', expand=True)
+        canvas.configure(yscrollcommand=scroll.set)
+        frame=ttk.Frame(canvas, padding=16)
+        window=canvas.create_window((0,0), window=frame, anchor='nw')
+        frame.bind('<Configure>', lambda e:canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.bind('<Configure>', lambda e:canvas.itemconfigure(window, width=e.width))
+        root.bind('<MouseWheel>', lambda e:canvas.yview_scroll(int(-e.delta/120), 'units'))
         ttk.Label(frame, text='AmpyGaze', font=('Segoe UI', 25, 'bold')).pack(anchor='w')
         ttk.Label(frame, text='Sguardo abbassato → MP3 · Sguardo alzato → silenzio').pack(anchor='w')
         self.preview = ttk.Label(frame); self.preview.pack(pady=10)
@@ -119,15 +152,41 @@ class App:
         ttk.Label(frame, text='Soglia sguardo: usa la calibrazione per impostare il punto di attivazione.').pack(anchor='w', pady=(12,0))
         ttk.Scale(frame, from_=.1, to=.95, variable=self.threshold).pack(fill='x')
         row=ttk.Frame(frame); row.pack(fill='x', pady=6)
-        ttk.Label(row, text='Sguardo basso: 0,35 s · Occhi chiusi: 1 s').pack(side='left')
+        ttk.Label(frame, text='Sensibilità sguardo (più alta = si attiva con movimenti più piccoli)').pack(anchor='w')
+        ttk.Scale(frame, from_=0, to=100, variable=self.sensitivity, command=lambda v:self.settings_changed()).pack(fill='x')
+        for title, var in [('Sguardo basso (s)',self.delay),('Occhi chiusi (s)',self.closed_delay),('Volto assente (s)',self.absent_delay),('Arresto audio (s)',self.release_delay)]:
+            cell=ttk.Frame(row); cell.pack(side='left', padx=6)
+            ttk.Label(cell, text=title).pack(anchor='w')
+            ttk.Spinbox(cell, from_=0, to=30, increment=.05, textvariable=var, width=8, command=self.settings_changed).pack(anchor='w')
+        ttk.Button(frame, text='Applica impostazioni', command=self.apply_settings).pack(anchor='w', pady=4)
         ttk.Label(frame, text='Soglia occhi chiusi: riduci se scatta anche guardando in basso.').pack(anchor='w')
         ttk.Scale(frame, from_=.06, to=.25, variable=self.closed_threshold).pack(fill='x')
         ttk.Checkbutton(frame, text='Avvia e attiva il controllo all’accesso a Windows', variable=self.auto, command=self.set_autostart).pack(anchor='w', pady=8)
         ttk.Label(frame, textvariable=self.status, wraplength=820, font=('Segoe UI', 11, 'bold')).pack(anchor='w', pady=8)
-        ttk.Label(frame, text='Elaborazione locale: nessun video salvato o trasmesso. Volto assente: silenzio. Occhi chiusi: MP3 dopo 1 secondo.\nChiudere la finestra termina l’app; minimizzarla mantiene il controllo attivo.', wraplength=820).pack(anchor='w')
+        ttk.Label(frame, text='Elaborazione locale: nessun video salvato o trasmesso. Sguardo basso, occhi chiusi o volto assente: MP3 dopo i tempi impostati.\nChiudere la finestra termina l’app; minimizzarla mantiene il controllo attivo.', wraplength=820).pack(anchor='w')
         root.protocol('WM_DELETE_WINDOW', self.close)
         root.after(40, self.poll)
         if '--autostart' in sys.argv: root.after(1000, self.start)
+
+    def settings_changed(self):
+        self.monitor=Monitor(); self.gate=AudioGate()
+        self.silence()
+
+    def apply_settings(self):
+        try:
+            self.parameters()
+            self.settings_changed()
+            self.save()
+            self.status.set('Sensibilità e tempi salvati.')
+        except (ValueError, tk.TclError):
+            messagebox.showerror('Impostazioni', 'Inserisci tempi da 0 a 30 secondi e sensibilità da 0 a 100.')
+
+    def parameters(self):
+        values=[v.get() for v in (self.delay,self.closed_delay,self.absent_delay,self.release_delay)]
+        if not all(0 <= v <= 30 for v in values): raise ValueError('Tempi non validi')
+        sensitivity=self.sensitivity.get()
+        if not 0 <= sensitivity <= 100: raise ValueError('Sensibilità non valida')
+        return (*values, effective_threshold(self.threshold.get(), sensitivity, self.inverted.get()))
 
     def reset_calibration(self):
         self.silence()
@@ -138,17 +197,19 @@ class App:
         self.threshold.set(.65)
         self.inverted.set(True)
         self.closed_threshold.set(.14)
-        self.monitor=Monitor()
+        self.sensitivity.set(50)
+        self.monitor=Monitor(); self.gate=AudioGate()
         self.save()
         self.status.set('Calibrazione azzerata. Ripeti le due calibrazioni dello sguardo.')
 
     def change_direction(self):
         self.silence()
-        self.monitor=Monitor()
+        self.monitor=Monitor(); self.gate=AudioGate()
         self.save()
 
     def save(self):
-        self.cfg.update(threshold=self.threshold.get(), delay=self.delay.get(), camera=self.camera.get(), neutral=self.neutral, low=self.low, inverted=self.inverted.get(), closed_threshold=self.closed_threshold.get())
+        self.parameters()
+        self.cfg.update(threshold=self.threshold.get(), delay=self.delay.get(), camera=self.camera.get(), neutral=self.neutral, low=self.low, inverted=self.inverted.get(), closed_threshold=self.closed_threshold.get(), closed_delay=self.closed_delay.get(), absent_delay=self.absent_delay.get(), release_delay=self.release_delay.get(), sensitivity=self.sensitivity.get())
         tmp = CONFIG.with_suffix('.tmp'); tmp.write_text(json.dumps(self.cfg), encoding='utf-8'); tmp.replace(CONFIG)
     def startup_file(self):
         return Path(os.environ['APPDATA']) / 'Microsoft/Windows/Start Menu/Programs/Startup/AmpyGaze.vbs'
@@ -204,11 +265,11 @@ class App:
             self.status.set('Seleziona prima un MP3.'); return
         try: self.save()
         except Exception as e: messagebox.showerror('Impostazioni',str(e)); return
-        self.stop_event.clear(); self.monitor=Monitor()
+        self.stop_event.clear(); self.monitor=Monitor(); self.gate=AudioGate()
         self.worker=threading.Thread(target=self.capture, args=(self.camera.get(),), daemon=True); self.worker.start()
         self.status.set('Apertura webcam…')
     def stop(self):
-        self.stop_event.set(); self.silence(); self.monitor=Monitor(); self.value=None
+        self.stop_event.set(); self.silence(); self.monitor=Monitor(); self.gate=AudioGate(); self.value=None
         self.calibration=None; self.status.set('In pausa — webcam in chiusura.')
     def capture(self, index):
         cap=None
@@ -245,7 +306,7 @@ class App:
     def calibrate(self, kind):
         if not self.worker or not self.worker.is_alive() or self.stop_event.is_set():
             messagebox.showinfo('Calibrazione','Avvia prima la webcam.'); return
-        self.calibration=(kind,time.monotonic()+3); self.samples=[]; self.silence(); self.monitor=Monitor()
+        self.calibration=(kind,time.monotonic()+3); self.samples=[]; self.silence(); self.monitor=Monitor(); self.gate=AudioGate()
     def poll(self):
         try:
             while True:
@@ -257,8 +318,8 @@ class App:
                 photo=ImageTk.PhotoImage(Image.fromarray(rgb).resize((480,360)))
                 self.preview.configure(image=photo); self.preview.image=photo
                 if time.monotonic()-stamp > .7:
-                    self.silence(); self.monitor=Monitor(); continue
-                if stamp-getattr(self, 'last_frame', stamp) > .7: self.monitor=Monitor()
+                    self.silence(); self.monitor=Monitor(); self.gate=AudioGate(); continue
+                if stamp-getattr(self, 'last_frame', stamp) > .7: self.monitor=Monitor(); self.gate=AudioGate()
                 self.value=score; self.last_frame=stamp
                 if self.calibration:
                     kind,end=self.calibration
@@ -273,17 +334,22 @@ class App:
                             if abs(self.low-self.neutral)<.04:
                                 self.status.set('Sguardi troppo simili: ripeti la calibrazione e migliora la luce.'); continue
                             self.inverted.set(self.low < self.neutral)
-                            self.monitor=Monitor()
+                            self.monitor=Monitor(); self.gate=AudioGate()
                             self.threshold.set((self.low+self.neutral)/2)
                         self.save(); self.status.set('Calibrazione salvata.')
                     continue
-                active, label=self.monitor.update(score,closed,face,self.threshold.get(),.35,self.closed_delay,stamp,self.inverted.get())
+                try: gaze_delay,closed_delay,absent_delay,release_delay,threshold=self.parameters()
+                except (ValueError,tk.TclError):
+                    self.silence(); self.monitor=Monitor(); self.gate=AudioGate()
+                    self.status.set('Tempi non validi: inserisci valori da 0 a 30 e premi Applica.'); continue
+                active, label=self.monitor.update(score,closed,face,threshold,gaze_delay,closed_delay,stamp,self.inverted.get(),absent_delay)
+                active=self.gate.update(active,stamp,release_delay)
                 if active: self.play()
                 else: self.silence()
                 self.status.set(label + (f' | Apertura occhi {openness:.2f}' if openness is not None else ''))
         except queue.Empty: pass
         if self.playing and self.worker and time.monotonic()-getattr(self,'last_frame',0)>.7:
-            self.silence(); self.monitor=Monitor(); self.status.set('Webcam senza aggiornamenti — audio fermato.')
+            self.silence(); self.monitor=Monitor(); self.gate=AudioGate(); self.status.set('Webcam senza aggiornamenti — audio fermato.')
         self.root.after(40,self.poll)
     def close(self):
         self.stop()

@@ -3,7 +3,7 @@ import ast
 import unittest
 from pathlib import Path
 source=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
-nodes=[n for n in source.body if isinstance(n,ast.ClassDef) and n.name in ('Trigger','Monitor')]
+nodes=[n for n in source.body if isinstance(n,(ast.ClassDef,ast.FunctionDef)) and n.name in ('Trigger','Monitor','AudioGate','effective_threshold')]
 namespace={}
 exec(compile(ast.Module(body=nodes,type_ignores=[]),'app_core','exec'),namespace)
 Monitor=namespace['Monitor']
@@ -48,5 +48,38 @@ class TimingTests(unittest.TestCase):
     def test_untracked_eyes_are_not_closed(self):
         self.assertFalse(self.state(0,score=None))
         self.assertFalse(self.state(2,score=None))
+
+    def test_missing_face_delay_and_recovery(self):
+        self.assertFalse(self.state(0,face=False))
+        self.assertFalse(self.state(.34,face=False))
+        self.assertTrue(self.state(.35,face=False))
+        self.assertFalse(self.state(.4,score=.2))
+    def test_custom_delays(self):
+        for kind in ('gaze','closed','absent'):
+            m=Monitor()
+            def call(t):
+                return m.update(.8,kind=='closed',kind!='absent',.55,2,3,t,False,4)[0]
+            seconds={'gaze':2,'closed':3,'absent':4}[kind]
+            self.assertFalse(call(0))
+            self.assertFalse(call(seconds-.01))
+            self.assertTrue(call(seconds))
+    def test_release_delay(self):
+        gate=namespace['AudioGate']()
+        self.assertTrue(gate.update(True,0,.5))
+        self.assertTrue(gate.update(False,1,.5))
+        self.assertTrue(gate.update(False,1.49,.5))
+        self.assertFalse(gate.update(False,1.5,.5))
+    def test_release_cancellation(self):
+        gate=namespace['AudioGate']()
+        gate.update(True,0,.5)
+        gate.update(False,1,.5)
+        self.assertTrue(gate.update(True,1.4,.5))
+        self.assertTrue(gate.update(False,2,.5))
+        self.assertFalse(gate.update(False,2.5,.5))
+    def test_sensitivity_in_both_directions(self):
+        fn=namespace['effective_threshold']
+        self.assertEqual(fn(.55,50,False),.55)
+        self.assertLess(fn(.55,100,False),.55)
+        self.assertGreater(fn(.55,100,True),.55)
 
 if __name__=='__main__': unittest.main()
