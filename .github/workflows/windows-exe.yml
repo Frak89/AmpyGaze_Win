@@ -19,6 +19,7 @@ jobs:
       - name: Check syntax and bundled vision models
         run: |
           python -m py_compile app.py
+          python test_logic.py
           python -c "import mediapipe as mp; m=mp.solutions.face_mesh.FaceMesh(refine_landmarks=True); m.close()"
       - name: Build executable
         run: python -m PyInstaller --noconfirm --clean --onedir --windowed --name AmpyGaze --collect-all mediapipe app.py

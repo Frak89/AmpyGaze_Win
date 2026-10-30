@@ -30,6 +30,36 @@ class Trigger:
         return self.active
 
 
+class Monitor:
+    def __init__(self):
+        self.gaze = Trigger()
+        self.closed_since = None
+    def update(self, score, closed, face, threshold, gaze_delay, closed_delay, now, inverted=False):
+        if not face:
+            self.gaze = Trigger()
+            self.closed_since = None
+            return False, 'Volto non rilevato — silenzio'
+        if closed:
+            self.gaze = Trigger()
+            if self.closed_since is None: self.closed_since = now
+            active = now - self.closed_since >= closed_delay
+            return active, 'Occhi chiusi — ' + ('MP3 attivo' if active else 'attesa 1 secondo')
+        self.closed_since = None
+        active = self.gaze.update(score, threshold, gaze_delay, now, inverted)
+        if score is None: return False, 'Sguardo non rilevato — silenzio'
+        return active, 'Sguardo basso — MP3 attivo' if active else 'Occhi aperti — silenzio'
+
+
+def eye_openness(points, ids, frame_width, frame_height):
+    import math
+    def distance(i, j):
+        return math.hypot((points[i].x-points[j].x)*frame_width,
+                          (points[i].y-points[j].y)*frame_height)
+    a,b,t1,b1,t2,b2 = ids
+    width = distance(a,b)
+    if width < 4: return None
+    return (distance(t1,b1)+distance(t2,b2)) / (2*width)
+
 def eye_measure(points, ids, iris):
     import numpy as np
     a, b, top, bottom = [np.array((points[i].x, points[i].y)) for i in ids]
@@ -43,14 +73,14 @@ def eye_measure(points, ids, iris):
 class App:
     def __init__(self, root):
         self.root = root
-        root.title('AmpyGaze Rev3 — controllo dello sguardo')
-        root.geometry('880x790')
+        root.title('AmpyGaze Rev4 — controllo dello sguardo')
+        root.geometry('920x890')
         try: self.cfg = json.loads(CONFIG.read_text(encoding='utf-8'))
         except (OSError, ValueError): self.cfg = {}
         self.events = queue.Queue(maxsize=2)
         self.stop_event = threading.Event()
         self.worker = None
-        self.trigger = Trigger()
+        self.monitor = Monitor()
         self.value = None
         self.calibration = None
         self.samples = []
@@ -60,7 +90,9 @@ class App:
         self.playing = False
         self.audio_ok = False
         self.threshold = tk.DoubleVar(value=self.cfg.get('threshold', .65))
-        self.delay = tk.DoubleVar(value=self.cfg.get('delay', .35))
+        self.delay = tk.DoubleVar(value=.35)
+        self.closed_delay = 1.0
+        self.closed_threshold = tk.DoubleVar(value=self.cfg.get('closed_threshold', .14))
         self.camera = tk.IntVar(value=self.cfg.get('camera', 0))
         self.status = tk.StringVar(value='Pronto. Seleziona un MP3, avvia e calibra.')
         self.audio_label = tk.StringVar(value=self.cfg.get('audio', 'Nessun MP3 selezionato'))
@@ -82,26 +114,41 @@ class App:
         calib = ttk.Frame(frame); calib.pack(fill='x')
         ttk.Button(calib, text='1. Calibra sguardo alzato (3 s)', command=lambda:self.calibrate('neutral')).pack(side='left', padx=4)
         ttk.Button(calib, text='2. Calibra sguardo abbassato (3 s)', command=lambda:self.calibrate('low')).pack(side='left', padx=4)
+        ttk.Button(calib, text='Reset calibrazione', command=self.reset_calibration).pack(side='left', padx=4)
         ttk.Checkbutton(frame, text='Inverti direzione (la calibrazione imposta automaticamente il verso)', variable=self.inverted, command=self.change_direction).pack(anchor='w', pady=(8,0))
         ttk.Label(frame, text='Soglia sguardo: usa la calibrazione per impostare il punto di attivazione.').pack(anchor='w', pady=(12,0))
         ttk.Scale(frame, from_=.1, to=.95, variable=self.threshold).pack(fill='x')
         row=ttk.Frame(frame); row.pack(fill='x', pady=6)
-        ttk.Label(row, text='Ritardo attivazione (secondi):').pack(side='left')
-        ttk.Spinbox(row, from_=.1, to=3, increment=.1, textvariable=self.delay, width=6).pack(side='left', padx=8)
+        ttk.Label(row, text='Sguardo basso: 0,35 s · Occhi chiusi: 1 s').pack(side='left')
+        ttk.Label(frame, text='Soglia occhi chiusi: riduci se scatta anche guardando in basso.').pack(anchor='w')
+        ttk.Scale(frame, from_=.06, to=.25, variable=self.closed_threshold).pack(fill='x')
         ttk.Checkbutton(frame, text='Avvia e attiva il controllo all’accesso a Windows', variable=self.auto, command=self.set_autostart).pack(anchor='w', pady=8)
         ttk.Label(frame, textvariable=self.status, wraplength=820, font=('Segoe UI', 11, 'bold')).pack(anchor='w', pady=8)
-        ttk.Label(frame, text='Elaborazione locale: nessun video salvato o trasmesso. Se il volto scompare o gli occhi si chiudono, l’audio si ferma.\nChiudere la finestra termina l’app; minimizzarla mantiene il controllo attivo.', wraplength=820).pack(anchor='w')
+        ttk.Label(frame, text='Elaborazione locale: nessun video salvato o trasmesso. Volto assente: silenzio. Occhi chiusi: MP3 dopo 1 secondo.\nChiudere la finestra termina l’app; minimizzarla mantiene il controllo attivo.', wraplength=820).pack(anchor='w')
         root.protocol('WM_DELETE_WINDOW', self.close)
         root.after(40, self.poll)
         if '--autostart' in sys.argv: root.after(1000, self.start)
 
+    def reset_calibration(self):
+        self.silence()
+        self.calibration=None
+        self.samples=[]
+        self.neutral=None
+        self.low=None
+        self.threshold.set(.65)
+        self.inverted.set(True)
+        self.closed_threshold.set(.14)
+        self.monitor=Monitor()
+        self.save()
+        self.status.set('Calibrazione azzerata. Ripeti le due calibrazioni dello sguardo.')
+
     def change_direction(self):
         self.silence()
-        self.trigger=Trigger()
+        self.monitor=Monitor()
         self.save()
 
     def save(self):
-        self.cfg.update(threshold=self.threshold.get(), delay=self.delay.get(), camera=self.camera.get(), neutral=self.neutral, low=self.low, inverted=self.inverted.get())
+        self.cfg.update(threshold=self.threshold.get(), delay=self.delay.get(), camera=self.camera.get(), neutral=self.neutral, low=self.low, inverted=self.inverted.get(), closed_threshold=self.closed_threshold.get())
         tmp = CONFIG.with_suffix('.tmp'); tmp.write_text(json.dumps(self.cfg), encoding='utf-8'); tmp.replace(CONFIG)
     def startup_file(self):
         return Path(os.environ['APPDATA']) / 'Microsoft/Windows/Start Menu/Programs/Startup/AmpyGaze.vbs'
@@ -157,11 +204,11 @@ class App:
             self.status.set('Seleziona prima un MP3.'); return
         try: self.save()
         except Exception as e: messagebox.showerror('Impostazioni',str(e)); return
-        self.stop_event.clear(); self.trigger=Trigger()
+        self.stop_event.clear(); self.monitor=Monitor()
         self.worker=threading.Thread(target=self.capture, args=(self.camera.get(),), daemon=True); self.worker.start()
         self.status.set('Apertura webcam…')
     def stop(self):
-        self.stop_event.set(); self.silence(); self.trigger=Trigger(); self.value=None
+        self.stop_event.set(); self.silence(); self.monitor=Monitor(); self.value=None
         self.calibration=None; self.status.set('In pausa — webcam in chiusura.')
     def capture(self, index):
         cap=None
@@ -181,34 +228,41 @@ class App:
                     ok, frame=cap.read()
                     if not ok: raise RuntimeError('La webcam non restituisce immagini.')
                     rgb=cv2.cvtColor(frame,cv2.COLOR_BGR2RGB)
-                    result=mesh.process(rgb); score=None
+                    result=mesh.process(rgb); score=None; openness=None; face=False
                     if result.multi_face_landmarks:
+                        face=True
                         pts=result.multi_face_landmarks[0].landmark
+                        eye_ratios=[eye_openness(pts, ids, rgb.shape[1], rgb.shape[0]) for ids in [(33,133,160,144,158,153),(362,263,385,380,387,373)]]
+                        if all(v is not None for v in eye_ratios): openness=max(eye_ratios)
                         scores=[eye_measure(pts,(33,133,159,145),468),eye_measure(pts,(362,263,386,374),473)]
                         if all(x is not None for x in scores): score=sum(scores)/2
                         for i in (468,473):
                             cv2.circle(rgb,(int(pts[i].x*rgb.shape[1]),int(pts[i].y*rgb.shape[0])),3,(0,255,150),-1)
-                    send(('frame', rgb[:,::-1].copy(), score, time.monotonic()))
+                    send(('frame', rgb[:,::-1].copy(), score, openness, face, time.monotonic()))
         except Exception as e: send(('error',str(e)))
         finally:
             if cap: cap.release()
     def calibrate(self, kind):
         if not self.worker or not self.worker.is_alive() or self.stop_event.is_set():
             messagebox.showinfo('Calibrazione','Avvia prima la webcam.'); return
-        self.calibration=(kind,time.monotonic()+3); self.samples=[]; self.silence(); self.trigger=Trigger()
+        self.calibration=(kind,time.monotonic()+3); self.samples=[]; self.silence(); self.monitor=Monitor()
     def poll(self):
         try:
             while True:
                 item=self.events.get_nowait()
                 if item[0]=='error': self.stop(); self.status.set(item[1]); continue
-                _, rgb, score, stamp=item
+                _, rgb, score, openness, face, stamp=item
+                closed = openness is not None and openness < self.closed_threshold.get()
                 if self.stop_event.is_set(): continue
-                photo=ImageTk.PhotoImage(Image.fromarray(rgb).resize((560,420)))
+                photo=ImageTk.PhotoImage(Image.fromarray(rgb).resize((480,360)))
                 self.preview.configure(image=photo); self.preview.image=photo
+                if time.monotonic()-stamp > .7:
+                    self.silence(); self.monitor=Monitor(); continue
+                if stamp-getattr(self, 'last_frame', stamp) > .7: self.monitor=Monitor()
                 self.value=score; self.last_frame=stamp
                 if self.calibration:
                     kind,end=self.calibration
-                    if score is not None: self.samples.append(score)
+                    if score is not None and not closed: self.samples.append(score)
                     self.status.set('Mantieni lo sguardo '+('alzato' if kind=='neutral' else 'abbassato')+'…')
                     if time.monotonic()>=end:
                         self.calibration=None
@@ -219,17 +273,17 @@ class App:
                             if abs(self.low-self.neutral)<.04:
                                 self.status.set('Sguardi troppo simili: ripeti la calibrazione e migliora la luce.'); continue
                             self.inverted.set(self.low < self.neutral)
-                            self.trigger=Trigger()
+                            self.monitor=Monitor()
                             self.threshold.set((self.low+self.neutral)/2)
                         self.save(); self.status.set('Calibrazione salvata.')
                     continue
-                active=self.trigger.update(score,self.threshold.get(),self.delay.get(),stamp,self.inverted.get())
+                active, label=self.monitor.update(score,closed,face,self.threshold.get(),.35,self.closed_delay,stamp,self.inverted.get())
                 if active: self.play()
                 else: self.silence()
-                self.status.set('Occhi non rilevati / chiusi — silenzio' if score is None else f'{"Sguardo basso — MP3 attivo" if active else "Sguardo alzato — silenzio"}  |  Valore {score:.2f} · Soglia {self.threshold.get():.2f}')
+                self.status.set(label + (f' | Apertura occhi {openness:.2f}' if openness is not None else ''))
         except queue.Empty: pass
         if self.playing and self.worker and time.monotonic()-getattr(self,'last_frame',0)>.7:
-            self.silence(); self.trigger=Trigger(); self.status.set('Webcam senza aggiornamenti — audio fermato.')
+            self.silence(); self.monitor=Monitor(); self.status.set('Webcam senza aggiornamenti — audio fermato.')
         self.root.after(40,self.poll)
     def close(self):
         self.stop()

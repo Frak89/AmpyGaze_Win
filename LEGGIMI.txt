@@ -1,4 +1,4 @@
-AMPYGAZE — Rev1 per Windows 10/11 x64
+AMPYGAZE — Rev4 per Windows 10/11 x64
 
 INSTALLAZIONE
 1. Installa Python 3.11 a 64 bit da python.org, includendo il launcher py.
@@ -14,7 +14,7 @@ COMPORTAMENTO
 - Sguardo basso: MP3 in ciclo, dopo il ritardo impostato (0,35 secondi predefiniti).
 - Sguardo rialzato: stop; al successivo abbassamento il file ricomincia dall'inizio.
 - Una piccola isteresi evita ripetuti avvii vicino alla soglia.
-- Occhi chiusi o volto assente: audio fermo. Non è un rilevatore di sonnolenza.
+- Occhi chiusi per 1 secondo: MP3 attivo. Volto assente: audio fermo.
 - Pausa interrompe audio e libera la webcam; Avvia riattiva il controllo.
 - Minimizzare mantiene l'app attiva; chiudere la finestra la termina.
 - MP3 copiato e impostazioni conservati in %LOCALAPPDATA%\AmpyGaze.
@@ -40,7 +40,7 @@ LIMITI E RISOLUZIONE PROBLEMI
 non un eye tracker di precisione. Luce scarsa, riflessi sugli occhiali,
 movimenti del capo e webcam lontana possono ridurre l'affidabilità.
 Calibra nella posizione in cui userai il PC e ripeti se cambi posizione.
-La Rev1 considera gli occhi CHIUSI come non rilevati, quindi ferma l'audio.
+La Rev4 distingue occhi chiusi e volto non rilevato. La soglia di apertura occhi è regolabile.
 In Impostazioni Windows > Privacy e sicurezza > Fotocamera abilita
 l'accesso per le app desktop. Chiudi altre app che occupano la webcam.
 Non eseguire contemporaneamente più copie di AmpyGaze.
@@ -58,3 +58,11 @@ Dopo installazione e configurazione, esegui Attiva_avvio_Windows.bat.
 Crea il collegamento nella cartella Esecuzione automatica, senza privilegi
 amministratore. Disattiva_avvio_Windows.bat rimuove il collegamento.
 Non occorre selezionare anche la casella nell’app.
+
+REV4
+Reset calibrazione azzera i due riferimenti, la soglia sguardo, il verso e
+la soglia occhi chiusi; conserva MP3, webcam e avvio automatico.
+Ritardi: sguardo basso 0,35 s; occhi chiusi 1 s continuo.
+Un normale battito di palpebre non avvia l’audio.
+Se la chiusura viene rilevata anche con lo sguardo basso, riduci la
+soglia occhi chiusi. Il valore visualizzato aiuta a regolarla.
