@@ -226,4 +226,8 @@ class App:
         self.root.destroy()
 
 if __name__=='__main__':
+    if '--self-test' in sys.argv:
+        with mp.solutions.face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True):
+            pass
+        sys.exit(0)
     root=tk.Tk(); App(root); root.mainloop()

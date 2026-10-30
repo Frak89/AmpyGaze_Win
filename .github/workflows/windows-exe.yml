@@ -16,12 +16,19 @@ jobs:
           architecture: x64
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
+      - name: Check syntax and bundled vision models
+        run: |
+          python -m py_compile app.py
+          python -c "import mediapipe as mp; m=mp.solutions.face_mesh.FaceMesh(refine_landmarks=True); m.close()"
       - name: Build executable
         run: python -m PyInstaller --noconfirm --clean --onedir --windowed --name AmpyGaze --collect-all mediapipe app.py
       - name: Verify packaged files
         shell: pwsh
         run: |
           if (!(Test-Path 'dist/AmpyGaze/AmpyGaze.exe')) { throw 'EXE missing' }
+          $p = Start-Process -FilePath 'dist/AmpyGaze/AmpyGaze.exe' -ArgumentList '--self-test' -PassThru
+          if (!$p.WaitForExit(60000)) { $p.Kill(); throw 'EXE smoke test timeout' }
+          if ($p.ExitCode -ne 0) { throw "EXE smoke test failed: $($p.ExitCode)" }
           Copy-Item LEGGIMI.txt dist/AmpyGaze/LEGGIMI.txt
       - uses: actions/upload-artifact@v4
         with:
