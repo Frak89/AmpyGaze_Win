@@ -1,0 +1,60 @@
+AMPYGAZE — Rev1 per Windows 10/11 x64
+
+INSTALLAZIONE
+1. Installa Python 3.11 a 64 bit da python.org, includendo il launcher py.
+2. Estrai tutto lo ZIP in una cartella stabile, ad esempio Documenti\AmpyGaze.
+3. Esegui Installa_e_Avvia.bat. La prima volta serve Internet per scaricare le dipendenze.
+4. Carica un MP3 e premi Avvia. Se necessario cambia il numero webcam (0, 1, 2) dopo Pausa.
+5. Guarda lo schermo normalmente e premi calibrazione 1: mantieni lo sguardo per 3 secondi.
+6. Guarda in basso e premi calibrazione 2: mantieni lo sguardo per 3 secondi.
+7. Regola soglia e ritardo se necessario. Le impostazioni vengono salvate alla chiusura.
+8. Se vuoi, seleziona l'avvio all'accesso Windows: al prossimo login il controllo partirà automaticamente.
+
+COMPORTAMENTO
+- Sguardo basso: MP3 in ciclo, dopo il ritardo impostato (0,35 secondi predefiniti).
+- Sguardo rialzato: stop; al successivo abbassamento il file ricomincia dall'inizio.
+- Una piccola isteresi evita ripetuti avvii vicino alla soglia.
+- Occhi chiusi o volto assente: audio fermo. Non è un rilevatore di sonnolenza.
+- Pausa interrompe audio e libera la webcam; Avvia riattiva il controllo.
+- Minimizzare mantiene l'app attiva; chiudere la finestra la termina.
+- MP3 copiato e impostazioni conservati in %LOCALAPPDATA%\AmpyGaze.
+- Video elaborato sul PC, senza registrazione, identificazione o invio a servizi.
+
+AVVIO AUTOMATICO
+Si intende l'accesso all'account Windows, non un login a un servizio.
+Nessun privilegio amministratore necessario. Un collegamento VBS viene creato
+nella cartella Esecuzione automatica dell'utente. Per rimuoverlo, deseleziona
+la casella nell'app, oppure premi Win+R, scrivi shell:startup ed elimina AmpyGaze.vbs.
+Non spostare la cartella dopo aver abilitato l'avvio automatico. Se la sposti,
+disabilita e riabilita l'opzione. L'app non opera sulla schermata di blocco.
+
+CREARE L'EXE
+Dopo la prima installazione esegui Crea_EXE.bat.
+Apri dist\AmpyGaze\AmpyGaze.exe e conserva tutta la cartella dist\AmpyGaze.
+Per l'avvio automatico dell'EXE, disabilita l'opzione nella versione Python,
+chiudila e riabilita l'opzione dalla versione EXE.
+Lo ZIP contiene il sorgente e gli script: non contiene un EXE già compilato.
+
+LIMITI E RISOLUZIONE PROBLEMI
+È una stima della posizione verticale dell'iride rispetto alle palpebre,
+non un eye tracker di precisione. Luce scarsa, riflessi sugli occhiali,
+movimenti del capo e webcam lontana possono ridurre l'affidabilità.
+Calibra nella posizione in cui userai il PC e ripeti se cambi posizione.
+La Rev1 considera gli occhi CHIUSI come non rilevati, quindi ferma l'audio.
+In Impostazioni Windows > Privacy e sicurezza > Fotocamera abilita
+l'accesso per le app desktop. Chiudi altre app che occupano la webcam.
+Non eseguire contemporaneamente più copie di AmpyGaze.
+Se non senti l'MP3 usa Prova MP3 mentre il controllo è in pausa e verifica
+il mixer audio di Windows. I primi avvii possono richiedere alcuni secondi.
+
+VERIFICA
+Verificata la sintassi Python e la logica di soglia, isteresi, ritardo e
+arresto su perdita degli occhi con test automatici. Webcam, MP3, avvio
+Windows e compilazione EXE richiedono prova sul PC Windows dell'utente.
+Dipendenze bloccate per riproducibilità con Python 3.11 x64.
+
+AVVIO CON BAT
+Dopo installazione e configurazione, esegui Attiva_avvio_Windows.bat.
+Crea il collegamento nella cartella Esecuzione automatica, senza privilegi
+amministratore. Disattiva_avvio_Windows.bat rimuove il collegamento.
+Non occorre selezionare anche la casella nell’app.
