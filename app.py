@@ -15,7 +15,10 @@ class Trigger:
     def __init__(self):
         self.active = False
         self.since = None
-    def update(self, value, threshold, delay, now):
+    def update(self, value, threshold, delay, now, inverted=False):
+        if inverted:
+            value = -value if value is not None else None
+            threshold = -threshold
         if value is None or value < threshold - .035:
             self.active = False
             self.since = None
@@ -40,7 +43,7 @@ def eye_measure(points, ids, iris):
 class App:
     def __init__(self, root):
         self.root = root
-        root.title('AmpyGaze — controllo dello sguardo')
+        root.title('AmpyGaze Rev3 — controllo dello sguardo')
         root.geometry('880x790')
         try: self.cfg = json.loads(CONFIG.read_text(encoding='utf-8'))
         except (OSError, ValueError): self.cfg = {}
@@ -53,6 +56,7 @@ class App:
         self.samples = []
         self.neutral = self.cfg.get('neutral')
         self.low = self.cfg.get('low')
+        self.inverted = tk.BooleanVar(value=self.cfg.get('inverted', True))
         self.playing = False
         self.audio_ok = False
         self.threshold = tk.DoubleVar(value=self.cfg.get('threshold', .65))
@@ -78,7 +82,8 @@ class App:
         calib = ttk.Frame(frame); calib.pack(fill='x')
         ttk.Button(calib, text='1. Calibra sguardo alzato (3 s)', command=lambda:self.calibrate('neutral')).pack(side='left', padx=4)
         ttk.Button(calib, text='2. Calibra sguardo abbassato (3 s)', command=lambda:self.calibrate('low')).pack(side='left', padx=4)
-        ttk.Label(frame, text='Soglia sguardo: aumenta per richiedere uno sguardo più basso.').pack(anchor='w', pady=(12,0))
+        ttk.Checkbutton(frame, text='Inverti direzione (la calibrazione imposta automaticamente il verso)', variable=self.inverted, command=self.change_direction).pack(anchor='w', pady=(8,0))
+        ttk.Label(frame, text='Soglia sguardo: usa la calibrazione per impostare il punto di attivazione.').pack(anchor='w', pady=(12,0))
         ttk.Scale(frame, from_=.1, to=.95, variable=self.threshold).pack(fill='x')
         row=ttk.Frame(frame); row.pack(fill='x', pady=6)
         ttk.Label(row, text='Ritardo attivazione (secondi):').pack(side='left')
@@ -90,8 +95,13 @@ class App:
         root.after(40, self.poll)
         if '--autostart' in sys.argv: root.after(1000, self.start)
 
+    def change_direction(self):
+        self.silence()
+        self.trigger=Trigger()
+        self.save()
+
     def save(self):
-        self.cfg.update(threshold=self.threshold.get(), delay=self.delay.get(), camera=self.camera.get(), neutral=self.neutral, low=self.low)
+        self.cfg.update(threshold=self.threshold.get(), delay=self.delay.get(), camera=self.camera.get(), neutral=self.neutral, low=self.low, inverted=self.inverted.get())
         tmp = CONFIG.with_suffix('.tmp'); tmp.write_text(json.dumps(self.cfg), encoding='utf-8'); tmp.replace(CONFIG)
     def startup_file(self):
         return Path(os.environ['APPDATA']) / 'Microsoft/Windows/Start Menu/Programs/Startup/AmpyGaze.vbs'
@@ -206,12 +216,14 @@ class App:
                         if kind=='neutral': self.neutral=statistics.median(self.samples)
                         else: self.low=statistics.median(self.samples)
                         if self.neutral is not None and self.low is not None:
-                            if self.low-self.neutral<.04:
+                            if abs(self.low-self.neutral)<.04:
                                 self.status.set('Sguardi troppo simili: ripeti la calibrazione e migliora la luce.'); continue
+                            self.inverted.set(self.low < self.neutral)
+                            self.trigger=Trigger()
                             self.threshold.set((self.low+self.neutral)/2)
                         self.save(); self.status.set('Calibrazione salvata.')
                     continue
-                active=self.trigger.update(score,self.threshold.get(),self.delay.get(),stamp)
+                active=self.trigger.update(score,self.threshold.get(),self.delay.get(),stamp,self.inverted.get())
                 if active: self.play()
                 else: self.silence()
                 self.status.set('Occhi non rilevati / chiusi — silenzio' if score is None else f'{"Sguardo basso — MP3 attivo" if active else "Sguardo alzato — silenzio"}  |  Valore {score:.2f} · Soglia {self.threshold.get():.2f}')
